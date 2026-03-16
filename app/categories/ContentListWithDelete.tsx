@@ -35,6 +35,10 @@ export default function ContentListWithDelete({
   const [showMoveSheet, setShowMoveSheet] = useState(false);
   const [moving, setMoving] = useState(false);
 
+  // Add to today's script
+  const [addingScript, setAddingScript] = useState(false);
+  const [scriptToast, setScriptToast] = useState<string | null>(null);
+
   // Source-file selector
   const [showSourceSheet, setShowSourceSheet] = useState(false);
 
@@ -187,6 +191,38 @@ export default function ContentListWithDelete({
     }
   };
 
+  const handleAddToScript = async () => {
+    if (selected.size === 0 || addingScript) return;
+    setAddingScript(true);
+    try {
+      const res = await fetch("/api/today-script", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contentIds: Array.from(selected) }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setScriptToast(`❌ ${data.error || "添加失败"}`);
+      } else {
+        const added = data.added as number;
+        const skipped = selected.size - added;
+        if (added === 0) {
+          setScriptToast("⚠️ 所选条目已全部在今日台本中");
+        } else if (skipped > 0) {
+          setScriptToast(`✅ 已加入 ${added} 条（${skipped} 条已存在）`);
+        } else {
+          setScriptToast(`✅ 已加入今日台本 ${added} 条`);
+        }
+        exitSelectMode();
+      }
+    } catch {
+      setScriptToast("❌ 网络错误，请重试");
+    } finally {
+      setAddingScript(false);
+      setTimeout(() => setScriptToast(null), 3000);
+    }
+  };
+
   const handleCopy = async (id: number, text: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -287,6 +323,17 @@ export default function ContentListWithDelete({
             <div className="flex items-center gap-2 flex-wrap justify-end">
               {selected.size > 0 && (
                 <>
+                  {/* Add to today's script — only show when not in delete confirm */}
+                  {!confirmDelete && (
+                    <button
+                      onClick={handleAddToScript}
+                      disabled={addingScript}
+                      className="text-xs bg-pink-500 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-pink-600 transition-colors disabled:opacity-60"
+                    >
+                      {addingScript ? "添加中..." : `🎙️ 今日台本`}
+                    </button>
+                  )}
+
                   {/* Move button — only show when not in delete confirm */}
                   {!confirmDelete && (
                     <button
@@ -347,6 +394,17 @@ export default function ContentListWithDelete({
           </>
         )}
       </div>
+
+      {/* Script toast */}
+      {scriptToast && (
+        <div className={`text-xs text-center px-3 py-2 rounded-xl font-medium ${
+          scriptToast.startsWith("❌") ? "bg-red-50 text-red-500" :
+          scriptToast.startsWith("⚠️") ? "bg-amber-50 text-amber-600" :
+          "bg-green-50 text-green-600"
+        }`}>
+          {scriptToast}
+        </div>
+      )}
 
       {/* Pending / moving hint */}
       {(isPending || moving) && (

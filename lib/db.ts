@@ -75,6 +75,13 @@ function initSchema(db: Database.Database) {
       entry_count INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS today_script (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      content_id INTEGER NOT NULL REFERENCES contents(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL DEFAULT 0,
+      added_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 }
 
@@ -504,6 +511,98 @@ export function recordUpload(data: {
   db.prepare(
     "INSERT OR REPLACE INTO file_uploads (md5, original_name, cached_path, entry_count) VALUES (?, ?, ?, ?)"
   ).run(data.md5, data.original_name, data.cached_path, data.entry_count);
+}
+
+// ── Today's Script ──────────────────────────────────────────────────────────
+
+export interface TodayScriptItem {
+  id: number;          // today_script.id
+  content_id: number;
+  position: number;
+  title: string;
+  body: string;
+  summary: string;
+  category_name: string;
+  tags: string[];
+  source_filename: string;
+}
+
+export function getTodayScript(): TodayScriptItem[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT ts.id, ts.content_id, ts.position,
+              c.title, c.body, c.summary, c.category_name, c.tags, c.source_filename
+       FROM today_script ts
+       JOIN contents c ON c.id = ts.content_id
+       ORDER BY ts.position ASC, ts.id ASC`
+    )
+    .all() as (TodayScriptItem & { tags: string })[];
+  return rows.map((r) => ({
+    ...r,
+    tags: typeof r.tags === "string" ? JSON.parse(r.tags) : r.tags,
+  }));
+}
+
+/** Add content items to today's script. Skips duplicates. Returns number added. */
+export function addToTodayScript(contentIds: number[]): number {
+  if (contentIds.length === 0) return 0;
+  const db = getDb();
+  const doAdd = db.transaction(() => {
+    const maxPos = (
+      db.prepare("SELECT COALESCE(MAX(position), -1) as m FROM today_script").get() as { m: number }
+    ).m;
+    const already = new Set(
+      (db.prepare("SELECT content_id FROM today_script").all() as { content_id: number }[]).map(
+        (r) => r.content_id
+      )
+    );
+    const stmt = db.prepare(
+      "INSERT INTO today_script (content_id, position) VALUES (?, ?)"
+    );
+    let added = 0;
+    let pos = maxPos + 1;
+    for (const cid of contentIds) {
+      if (already.has(cid)) continue;
+      stmt.run(cid, pos++);
+      added++;
+    }
+    return added;
+  });
+  return doAdd() as number;
+}
+
+/** Remove today_script entries by their own ids (not content_id). */
+export function removeFromTodayScript(ids: number[]): number {
+  if (ids.length === 0) return 0;
+  const db = getDb();
+  const stmt = db.prepare("DELETE FROM today_script WHERE id = ?");
+  const doRemove = db.transaction(() => {
+    let removed = 0;
+    for (const id of ids) {
+      removed += stmt.run(id).changes;
+    }
+    return removed;
+  });
+  return doRemove() as number;
+}
+
+/** Clear all entries from today's script. */
+export function clearTodayScript(): number {
+  const db = getDb();
+  const count = (db.prepare("SELECT COUNT(*) as c FROM today_script").get() as { c: number }).c;
+  db.prepare("DELETE FROM today_script").run();
+  return count;
+}
+
+/** Reorder items by supplying ordered array of today_script ids. */
+export function reorderTodayScript(orderedIds: number[]): void {
+  const db = getDb();
+  const stmt = db.prepare("UPDATE today_script SET position = ? WHERE id = ?");
+  const doReorder = db.transaction(() => {
+    orderedIds.forEach((id, idx) => stmt.run(idx, id));
+  });
+  doReorder();
 }
 
 export function getContentsBySourceMd5(md5: string): Content[] {
