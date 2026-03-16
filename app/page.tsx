@@ -1,11 +1,13 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { marked } from "marked";
 
 interface ContentResult {
   id: number;
   title: string;
   summary: string;
+  body: string;
   category_name: string;
   tags: string[];
   created_at: string;
@@ -43,10 +45,12 @@ export default function HomePage() {
   const [category, setCategory] = useState("");
   const [results, setResults] = useState<ContentResult[] | null>(null);
   const [loading, setLoading] = useState(false);
-  const [history, setHistory] = useState<SearchHistory[]>([]);
-  const [showHistory, setShowHistory] = useState(false);
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const [copiedId, setCopiedId] = useState<number | null>(null);
   const [categories, setCategories] = useState<string[]>([]);
+  const [history, setHistory] = useState<SearchHistory[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     setHistory(loadHistory());
@@ -58,20 +62,22 @@ export default function HomePage() {
       .catch(() => {});
   }, []);
 
-  const doSearch = useCallback(
-    async (q: string, cat: string) => {
-      if (!q.trim() && !cat) return;
-      setLoading(true);
-      setShowHistory(false);
-      try {
-        const params = new URLSearchParams();
-        if (q.trim()) params.set("q", q.trim());
-        if (cat) params.set("category", cat);
-        const res = await fetch(`/api/search?${params}`);
-        const data = await res.json();
-        const newResults: ContentResult[] = data.results || [];
-        setResults(newResults);
+  const doSearch = useCallback(async (q: string, cat: string) => {
+    if (!q.trim() && !cat) {
+      setResults(null);
+      return;
+    }
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (q.trim()) params.set("q", q.trim());
+      if (cat) params.set("category", cat);
+      const res = await fetch(`/api/search?${params}`);
+      const data = await res.json();
+      const newResults: ContentResult[] = data.results || [];
+      setResults(newResults);
 
+      if (q.trim() || cat) {
         const entry: SearchHistory = {
           query: q.trim(),
           category: cat || undefined,
@@ -79,30 +85,42 @@ export default function HomePage() {
           results: newResults,
         };
         const updatedHistory = loadHistory();
-        const filtered = [entry, ...updatedHistory.filter(
-          (h) => !(h.query === entry.query && h.category === entry.category)
-        )];
+        const filtered = [
+          entry,
+          ...updatedHistory.filter(
+            (h) => !(h.query === entry.query && h.category === entry.category)
+          ),
+        ];
         setHistory(filtered);
         saveHistory(filtered);
-      } catch {
-        setResults([]);
-      } finally {
-        setLoading(false);
       }
-    },
-    []
-  );
+    } catch {
+      setResults([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    doSearch(query, category);
-  };
+  // Debounced auto-search
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (!query && !category) {
+      setResults(null);
+      return;
+    }
+    if (query.length === 0 && !category) return;
+    debounceRef.current = setTimeout(() => {
+      doSearch(query, category);
+    }, 350);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [query, category, doSearch]);
 
   const restoreHistory = (h: SearchHistory) => {
     setQuery(h.query);
     setCategory(h.category || "");
     setResults(h.results);
-    setShowHistory(false);
   };
 
   const clearHistory = () => {
@@ -110,102 +128,74 @@ export default function HomePage() {
     saveHistory([]);
   };
 
-  const formatTime = (ts: number) => {
-    const d = new Date(ts);
-    return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const toggleExpand = (id: number) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const handleCopy = async (id: number, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2000);
+    } catch {
+      // ignore
+    }
   };
 
   return (
-    <div className="space-y-5">
-      <div className="bg-white rounded-2xl shadow-sm p-5">
-        <h1 className="text-xl font-bold text-gray-700 mb-4 text-center">
-          🌸 搜索直播内容
-        </h1>
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <div className="relative">
-            <input
-              ref={inputRef}
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onFocus={() => history.length > 0 && setShowHistory(true)}
-              onBlur={() => setTimeout(() => setShowHistory(false), 200)}
-              placeholder="输入关键词搜索..."
-              className="w-full border border-pink-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-pink-300 bg-pink-50"
-            />
-            {query && (
-              <button
-                type="button"
-                onClick={() => { setQuery(""); inputRef.current?.focus(); }}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xl leading-none"
-              >
-                ×
-              </button>
-            )}
-          </div>
-
-          {categories.length > 0 && (
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className="w-full border border-pink-200 rounded-xl px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-pink-300 bg-pink-50 text-gray-600"
-            >
-              <option value="">全部分类</option>
-              {categories.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          )}
-
+    <div className="space-y-4">
+      {/* Search input */}
+      <div className="relative">
+        <input
+          ref={inputRef}
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="输入关键词搜索..."
+          className="w-full border border-pink-200 rounded-2xl px-4 py-3 pr-10 text-base focus:outline-none focus:ring-2 focus:ring-pink-300 bg-white shadow-sm"
+        />
+        {loading && (
+          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-pink-400 text-sm animate-spin">
+            ◌
+          </span>
+        )}
+        {query && !loading && (
           <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-gradient-to-r from-pink-400 to-rose-400 text-white rounded-xl py-3 text-base font-semibold hover:from-pink-500 hover:to-rose-500 transition-all disabled:opacity-60 shadow-sm"
+            type="button"
+            onClick={() => { setQuery(""); inputRef.current?.focus(); }}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xl leading-none"
           >
-            {loading ? "搜索中..." : "🔍 搜索"}
+            ×
           </button>
-        </form>
-
-        {showHistory && history.length > 0 && (
-          <div className="mt-3 border border-pink-100 rounded-xl overflow-hidden shadow-sm">
-            <div className="flex items-center justify-between px-4 py-2 bg-pink-50 border-b border-pink-100">
-              <span className="text-xs text-gray-500 font-medium">历史搜索</span>
-              <button
-                onClick={clearHistory}
-                className="text-xs text-red-400 hover:text-red-600"
-              >
-                清除
-              </button>
-            </div>
-            {history.slice(0, 8).map((h, i) => (
-              <button
-                key={i}
-                onMouseDown={() => restoreHistory(h)}
-                className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-pink-50 text-left border-b border-pink-50 last:border-0"
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-gray-400 text-sm flex-shrink-0">🕐</span>
-                  <span className="text-sm text-gray-700 truncate">
-                    {h.query || `[${h.category}]`}
-                    {h.category && h.query && (
-                      <span className="ml-1 text-xs text-pink-400">· {h.category}</span>
-                    )}
-                  </span>
-                </div>
-                <span className="text-xs text-gray-400 flex-shrink-0 ml-2">{formatTime(h.timestamp)}</span>
-              </button>
-            ))}
-          </div>
         )}
       </div>
 
-      {categories.length > 0 && !results && (
-        <div className="flex flex-wrap gap-2">
+      {/* Category chips */}
+      {categories.length > 0 && (
+        <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+          <button
+            onClick={() => setCategory("")}
+            className={`flex-shrink-0 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+              category === ""
+                ? "bg-pink-400 text-white"
+                : "bg-white border border-pink-200 text-pink-600"
+            }`}
+          >
+            全部
+          </button>
           {categories.map((c) => (
             <button
               key={c}
-              onClick={() => { setCategory(c); doSearch("", c); }}
-              className="bg-white border border-pink-200 rounded-full px-4 py-1.5 text-sm text-pink-600 hover:bg-pink-50 transition-colors shadow-sm"
+              onClick={() => setCategory(c)}
+              className={`flex-shrink-0 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                category === c
+                  ? "bg-pink-400 text-white"
+                  : "bg-white border border-pink-200 text-pink-600"
+              }`}
             >
               {c}
             </button>
@@ -213,6 +203,34 @@ export default function HomePage() {
         </div>
       )}
 
+      {/* Search history chips */}
+      {query === "" && results === null && history.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-gray-400 font-medium">历史搜索</span>
+            <button
+              onClick={clearHistory}
+              className="text-xs text-red-400 hover:text-red-600"
+            >
+              清除历史
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {history.slice(0, 8).map((h, i) => (
+              <button
+                key={i}
+                onClick={() => restoreHistory(h)}
+                className="flex-shrink-0 bg-white border border-pink-100 text-pink-600 text-xs px-3 py-1.5 rounded-full hover:bg-pink-50 transition-colors shadow-sm"
+              >
+                🕐 {(h.query || `[${h.category}]`).slice(0, 10)}
+                {(h.query || `[${h.category || ""}]`).length > 10 ? "…" : ""}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Results */}
       {results !== null && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
@@ -220,7 +238,7 @@ export default function HomePage() {
               找到 {results.length} 条结果
             </h2>
             <button
-              onClick={() => setResults(null)}
+              onClick={() => { setResults(null); setQuery(""); setCategory(""); }}
               className="text-xs text-pink-400 hover:text-pink-600"
             >
               清除结果
@@ -235,11 +253,11 @@ export default function HomePage() {
             </div>
           ) : (
             results.map((item) => (
-              <a
+              <div
                 key={item.id}
-                href={`/content/${item.id}`}
-                className="block bg-white rounded-2xl p-4 shadow-sm hover:shadow-md transition-shadow border border-transparent hover:border-pink-100"
+                className="bg-white rounded-2xl shadow-sm p-4 border-2 border-transparent"
               >
+                {/* Header */}
                 <div className="flex items-start justify-between gap-2">
                   <h3 className="text-base font-semibold text-gray-800 leading-snug flex-1">
                     {item.title}
@@ -248,11 +266,15 @@ export default function HomePage() {
                     {item.category_name}
                   </span>
                 </div>
+
+                {/* Summary */}
                 {item.summary && (
                   <p className="text-sm text-gray-500 mt-1.5 line-clamp-2">
                     {item.summary}
                   </p>
                 )}
+
+                {/* Tags */}
                 {item.tags?.length > 0 && (
                   <div className="flex flex-wrap gap-1.5 mt-2">
                     {item.tags.slice(0, 4).map((tag) => (
@@ -265,17 +287,46 @@ export default function HomePage() {
                     ))}
                   </div>
                 )}
-              </a>
+
+                {/* Action row */}
+                <div className="mt-3 flex items-center justify-between gap-2">
+                  <button
+                    onClick={() => toggleExpand(item.id)}
+                    className="text-sm text-pink-500 font-medium"
+                  >
+                    {expandedIds.has(item.id) ? "收起 ▴" : "展开全文 ▾"}
+                  </button>
+                  <button
+                    onClick={() => handleCopy(item.id, item.body)}
+                    className="flex items-center gap-1 bg-pink-50 hover:bg-pink-100 border border-pink-200 text-pink-600 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors"
+                  >
+                    {copiedId === item.id ? "✅ 已复制" : "📋 复制"}
+                  </button>
+                </div>
+
+                {/* Expanded body */}
+                {expandedIds.has(item.id) && (
+                  <div className="mt-3 pt-3 border-t border-pink-50">
+                    <div
+                      className="markdown-body text-sm"
+                      dangerouslySetInnerHTML={{
+                        __html: marked(item.body) as string,
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
             ))
           )}
         </div>
       )}
 
+      {/* Empty / welcome state */}
       {results === null && !loading && categories.length === 0 && (
         <div className="bg-white rounded-2xl p-8 text-center text-gray-400 shadow-sm">
           <div className="text-5xl mb-4">🌸</div>
           <p className="text-base font-medium text-gray-500">欢迎使用萌萌的直播助手</p>
-          <p className="text-sm mt-2">请先在「上传」页面上传内容文件</p>
+          <p className="text-sm mt-2">请先在「管理」页面上传内容文件</p>
           <a
             href="/admin"
             className="inline-block mt-4 bg-pink-400 text-white px-6 py-2 rounded-full text-sm hover:bg-pink-500 transition-colors"

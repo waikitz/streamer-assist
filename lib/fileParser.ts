@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { spawnSync } from "child_process";
 
 export async function parseFile(
   filePath: string,
@@ -14,10 +15,17 @@ export async function parseFile(
       return buffer.toString("utf-8");
 
     case ".pdf": {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const pdfParse = require("pdf-parse") as (buf: Buffer) => Promise<{ text: string }>;
-      const data = await pdfParse(buffer);
-      return data.text;
+      const workerPath = path.join(process.cwd(), "lib", "pdf-worker.cjs");
+      const result = spawnSync(process.execPath, [workerPath], {
+        input: buffer,
+        maxBuffer: 100 * 1024 * 1024,
+        timeout: 30000,
+      });
+      if (result.status !== 0) {
+        const errMsg = result.stderr?.toString() || "PDF 解析失败";
+        throw new Error(errMsg);
+      }
+      return result.stdout.toString("utf-8");
     }
 
     case ".docx": {

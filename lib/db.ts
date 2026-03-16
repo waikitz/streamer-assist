@@ -66,6 +66,15 @@ function initSchema(db: Database.Database) {
       INSERT INTO contents_fts(rowid, title, body, summary, tags)
       VALUES (new.id, new.title, new.body, new.summary, new.tags);
     END;
+
+    CREATE TABLE IF NOT EXISTS file_uploads (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      md5 TEXT NOT NULL UNIQUE,
+      original_name TEXT NOT NULL,
+      cached_path TEXT NOT NULL,
+      entry_count INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 }
 
@@ -220,6 +229,290 @@ export function getContentsByCategory(
       "SELECT * FROM contents WHERE category_name = ? ORDER BY created_at DESC LIMIT ?"
     )
     .all(categoryName, limit) as Content[];
+  return rows.map((r) => ({
+    ...r,
+    tags: typeof r.tags === "string" ? JSON.parse(r.tags) : r.tags,
+  }));
+}
+
+export function clearDatabase(): { deletedContents: number; deletedCategories: number } {
+  const db = getDb();
+  const contentsInfo = db.prepare("SELECT COUNT(*) as count FROM contents").get() as { count: number };
+  const categoriesInfo = db.prepare("SELECT COUNT(*) as count FROM categories").get() as { count: number };
+
+  const doDelete = db.transaction(() => {
+    // Drop triggers first to avoid FTS trigger conflicts
+    db.prepare("DROP TRIGGER IF EXISTS contents_ai").run();
+    db.prepare("DROP TRIGGER IF EXISTS contents_ad").run();
+    db.prepare("DROP TRIGGER IF EXISTS contents_au").run();
+    // Drop and recreate FTS virtual table — most reliable way to clear it
+    db.prepare("DROP TABLE IF EXISTS contents_fts").run();
+    // Delete main data
+    db.prepare("DELETE FROM contents").run();
+    db.prepare("DELETE FROM categories").run();
+    // Recreate FTS table and triggers
+    db.exec(`
+      CREATE VIRTUAL TABLE contents_fts USING fts5(
+        title, body, summary, tags,
+        content=contents, content_rowid=id
+      );
+      CREATE TRIGGER contents_ai AFTER INSERT ON contents BEGIN
+        INSERT INTO contents_fts(rowid, title, body, summary, tags)
+        VALUES (new.id, new.title, new.body, new.summary, new.tags);
+      END;
+      CREATE TRIGGER contents_ad AFTER DELETE ON contents BEGIN
+        INSERT INTO contents_fts(contents_fts, rowid, title, body, summary, tags)
+        VALUES ('delete', old.id, old.title, old.body, old.summary, old.tags);
+      END;
+      CREATE TRIGGER contents_au AFTER UPDATE ON contents BEGIN
+        INSERT INTO contents_fts(contents_fts, rowid, title, body, summary, tags)
+        VALUES ('delete', old.id, old.title, old.body, old.summary, old.tags);
+        INSERT INTO contents_fts(rowid, title, body, summary, tags)
+        VALUES (new.id, new.title, new.body, new.summary, new.tags);
+      END;
+    `);
+  });
+
+  doDelete();
+
+  return {
+    deletedContents: contentsInfo.count,
+    deletedCategories: categoriesInfo.count,
+  };
+}
+
+export function renameCategory(
+  oldName: string,
+  newName: string
+): { updated: number } {
+  const db = getDb();
+
+  const doRename = db.transaction(() => {
+    // Check target name doesn't already exist (unless it's the same)
+    if (oldName.trim().toLowerCase() !== newName.trim().toLowerCase()) {
+      const conflict = db
+        .prepare("SELECT id FROM categories WHERE LOWER(name) = LOWER(?)")
+        .get(newName.trim()) as { id: number } | undefined;
+      if (conflict) throw new Error(`分类"${newName}"已存在`);
+    }
+
+    // Update the categories table
+    db.prepare("UPDATE categories SET name = ? WHERE name = ?").run(
+      newName.trim(),
+      oldName
+    );
+
+    // Update category_name on all related contents
+    const info = db
+      .prepare("UPDATE contents SET category_name = ? WHERE category_name = ?")
+      .run(newName.trim(), oldName);
+
+    return info.changes as number;
+  });
+
+  const updated = doRename() as number;
+  return { updated };
+}
+
+export function clearFileCache(): { deletedFiles: number } {
+  const db = getDb();
+  const uploads = db.prepare("SELECT cached_path FROM file_uploads").all() as { cached_path: string }[];
+  let deletedFiles = 0;
+  for (const u of uploads) {
+    try {
+      fs.unlinkSync(u.cached_path);
+      deletedFiles++;
+    } catch { /* already gone */ }
+  }
+  db.prepare("DELETE FROM file_uploads").run();
+  return { deletedFiles };
+}
+
+export function moveContents(ids: number[], newCategoryName: string): number {
+  if (ids.length === 0) return 0;
+  const db = getDb();
+
+  const doMove = db.transaction(() => {
+    // Upsert the target category
+    let categoryId: number;
+    const existingCat = db
+      .prepare("SELECT id FROM categories WHERE name = ?")
+      .get(newCategoryName) as { id: number } | undefined;
+    if (existingCat) {
+      categoryId = existingCat.id;
+    } else {
+      const r = db
+        .prepare("INSERT INTO categories (name, description, icon) VALUES (?, '', '📄')")
+        .run(newCategoryName);
+      categoryId = r.lastInsertRowid as number;
+    }
+
+    // Update each content row
+    const stmt = db.prepare(
+      "UPDATE contents SET category_id = ?, category_name = ? WHERE id = ?"
+    );
+    let moved = 0;
+    for (const id of ids) {
+      const info = stmt.run(categoryId, newCategoryName, id);
+      moved += info.changes;
+    }
+
+    // Clean up categories that now have zero contents
+    db.prepare(
+      `DELETE FROM categories WHERE id NOT IN (
+         SELECT DISTINCT category_id FROM contents WHERE category_id IS NOT NULL
+       )`
+    ).run();
+
+    return moved;
+  });
+
+  return doMove() as number;
+}
+
+export function deleteContents(ids: number[]): number {
+  if (ids.length === 0) return 0;
+  const db = getDb();
+  // Delete in a transaction — FTS triggers handle index cleanup automatically
+  const doDelete = db.transaction(() => {
+    let deleted = 0;
+    const stmt = db.prepare("DELETE FROM contents WHERE id = ?");
+    for (const id of ids) {
+      const info = stmt.run(id);
+      deleted += info.changes;
+    }
+    // Remove any categories that now have zero contents
+    db.prepare(
+      `DELETE FROM categories WHERE id NOT IN (SELECT DISTINCT category_id FROM contents WHERE category_id IS NOT NULL)`
+    ).run();
+    return deleted;
+  });
+  return doDelete() as number;
+}
+
+function areTitlesSimilar(a: string, b: string): boolean {
+  const normalize = (s: string) => s.toLowerCase().trim().replace(/\s+/g, " ");
+  const na = normalize(a);
+  const nb = normalize(b);
+
+  if (na === nb) return true;
+
+  if (na.length >= 3 && nb.length >= 3) {
+    if (na.includes(nb) || nb.includes(na)) return true;
+  }
+
+  // Character bigram Jaccard similarity
+  const bigrams = (s: string): Set<string> => {
+    const set = new Set<string>();
+    for (let i = 0; i < s.length - 1; i++) {
+      set.add(s.slice(i, i + 2));
+    }
+    return set;
+  };
+  const ba = bigrams(na);
+  const bb = bigrams(nb);
+  if (ba.size === 0 && bb.size === 0) return true;
+  if (ba.size === 0 || bb.size === 0) return false;
+  let intersection = 0;
+  for (const g of ba) {
+    if (bb.has(g)) intersection++;
+  }
+  const union = ba.size + bb.size - intersection;
+  return intersection / union >= 0.5;
+}
+
+export function findSimilarContent(
+  title: string,
+  categoryName: string
+): Content | null {
+  const db = getDb();
+
+  // 1. Exact case-insensitive title match in same category
+  const exact = db
+    .prepare(
+      "SELECT * FROM contents WHERE LOWER(title) = LOWER(?) AND category_name = ?"
+    )
+    .get(title, categoryName) as Content | undefined;
+  if (exact) {
+    return {
+      ...exact,
+      tags: typeof exact.tags === "string" ? JSON.parse(exact.tags) : exact.tags,
+    };
+  }
+
+  // 2. FTS search, filter by category, check title similarity
+  let candidates: Content[] = [];
+  try {
+    const ftsQuery = title.replace(/["*]/g, " ").trim();
+    if (ftsQuery) {
+      candidates = db
+        .prepare(
+          `SELECT c.* FROM contents_fts
+           JOIN contents c ON c.id = contents_fts.rowid
+           WHERE contents_fts MATCH ? AND c.category_name = ?
+           LIMIT 20`
+        )
+        .all(ftsQuery + "*", categoryName) as Content[];
+    }
+  } catch {
+    // FTS query may fail for certain inputs; fall through with empty candidates
+  }
+
+  for (const row of candidates) {
+    if (areTitlesSimilar(title, row.title)) {
+      return {
+        ...row,
+        tags: typeof row.tags === "string" ? JSON.parse(row.tags) : row.tags,
+      };
+    }
+  }
+
+  return null;
+}
+
+export function mergeContentBody(id: number, additionalBody: string): void {
+  const db = getDb();
+  const existing = db
+    .prepare("SELECT body FROM contents WHERE id = ?")
+    .get(id) as { body: string } | undefined;
+  if (!existing) return;
+  const newBody = existing.body + "\n\n---\n\n" + additionalBody;
+  db.prepare("UPDATE contents SET body = ? WHERE id = ?").run(newBody, id);
+}
+
+export interface FileUpload {
+  id: number;
+  md5: string;
+  original_name: string;
+  cached_path: string;
+  entry_count: number;
+  created_at: string;
+}
+
+export function findUploadByMd5(md5: string): FileUpload | null {
+  const db = getDb();
+  return (db.prepare("SELECT * FROM file_uploads WHERE md5 = ?").get(md5) as FileUpload) ?? null;
+}
+
+export function recordUpload(data: {
+  md5: string;
+  original_name: string;
+  cached_path: string;
+  entry_count: number;
+}): void {
+  const db = getDb();
+  db.prepare(
+    "INSERT OR REPLACE INTO file_uploads (md5, original_name, cached_path, entry_count) VALUES (?, ?, ?, ?)"
+  ).run(data.md5, data.original_name, data.cached_path, data.entry_count);
+}
+
+export function getContentsBySourceMd5(md5: string): Content[] {
+  const db = getDb();
+  const upload = findUploadByMd5(md5);
+  if (!upload) return [];
+  const rows = db
+    .prepare("SELECT * FROM contents WHERE source_filename = ? ORDER BY id ASC")
+    .all(upload.original_name) as Content[];
   return rows.map((r) => ({
     ...r,
     tags: typeof r.tags === "string" ? JSON.parse(r.tags) : r.tags,

@@ -34,10 +34,18 @@ yarn-error.log*
 .env*
 !.env.local.example
 
-# database
+# server process files
+.server.pid
+.server.log
+.ngrok.pid
+.ngrok.log
+ngrok-app.yml
+
+# database & uploads
 /data/*.db
 /data/*.db-shm
 /data/*.db-wal
+/data/uploads/
 
 # vercel
 .vercel

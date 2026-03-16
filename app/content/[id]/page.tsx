@@ -1,5 +1,6 @@
 import { getContentById } from "@/lib/db";
 import { notFound } from "next/navigation";
+import { marked } from "marked";
 
 export default async function ContentPage({
   params,
@@ -10,6 +11,8 @@ export default async function ContentPage({
   const content = getContentById(parseInt(id));
 
   if (!content) notFound();
+
+  const bodyHtml = await marked.parse(content.body, { gfm: true, breaks: true });
 
   const formatDate = (dateStr: string) => {
     const d = new Date(dateStr);
@@ -61,19 +64,9 @@ export default async function ContentPage({
         {/* Body */}
         <div className="px-5 py-5">
           <div
-            className="prose-content text-gray-700 leading-loose"
-            style={{ fontSize: "1.05rem", lineHeight: "1.9" }}
-          >
-            {content.body.split("\n").map((line, i) => (
-              line.trim() ? (
-                <p key={i} className="mb-3">
-                  {line}
-                </p>
-              ) : (
-                <div key={i} className="mb-2" />
-              )
-            ))}
-          </div>
+            className="markdown-body"
+            dangerouslySetInnerHTML={{ __html: bodyHtml }}
+          />
         </div>
 
         {/* Footer */}
