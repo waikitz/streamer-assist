@@ -226,6 +226,27 @@ export function getAllCategories(): (Category & { count: number })[] {
     .all() as (Category & { count: number })[];
 }
 
+/** Returns all contents grouped by category, ordered by category name then created_at. */
+export function getAllContentsByCategory(): Record<string, Content[]> {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      "SELECT * FROM contents ORDER BY category_name ASC, created_at DESC"
+    )
+    .all() as Content[];
+
+  const grouped: Record<string, Content[]> = {};
+  for (const r of rows) {
+    const cat = r.category_name || "未分类";
+    if (!grouped[cat]) grouped[cat] = [];
+    grouped[cat].push({
+      ...r,
+      tags: typeof r.tags === "string" ? JSON.parse(r.tags) : r.tags,
+    });
+  }
+  return grouped;
+}
+
 export function getContentsByCategory(
   categoryName: string,
   limit = 50

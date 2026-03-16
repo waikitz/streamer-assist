@@ -1,4 +1,4 @@
-import { getAllCategories, getContentsByCategory } from "@/lib/db";
+import { getAllCategories, getContentsByCategory, getAllContentsByCategory } from "@/lib/db";
 import ContentListWithDelete from "./ContentListWithDelete";
 import Link from "next/link";
 
@@ -25,9 +25,13 @@ async function CategoriesClient({
 }) {
   const { cat } = await searchParams;
   const selectedCat = cat || "";
-  const contents = selectedCat
-    ? getContentsByCategory(selectedCat, 50)
+  const allCategoryNames = categories.map((c) => c.name);
+
+  // Load content(s) for the selected view
+  const singleContents = selectedCat
+    ? getContentsByCategory(selectedCat, 200)
     : [];
+  const allGrouped = !selectedCat ? getAllContentsByCategory() : {};
 
   if (categories.length === 0) {
     return (
@@ -77,10 +81,11 @@ async function CategoriesClient({
         </div>
       </div>
 
-      {/* Content list or prompt */}
+      {/* Content */}
       {selectedCat ? (
+        /* ── Single category view ── */
         <ContentListWithDelete
-          contents={contents.map((c) => ({
+          contents={singleContents.map((c) => ({
             id: c.id,
             title: c.title,
             summary: c.summary,
@@ -89,13 +94,39 @@ async function CategoriesClient({
             source_filename: c.source_filename,
           }))}
           category={selectedCat}
-          allCategories={categories.map((c) => c.name)}
+          allCategories={allCategoryNames}
         />
       ) : (
-        <div className="bg-white rounded-2xl p-8 text-center text-gray-400 shadow-sm">
-          <div className="text-4xl mb-3">👆</div>
-          <p className="text-base font-medium text-gray-500">请选择分类</p>
-          <p className="text-sm mt-1">点击上方标签查看对应内容</p>
+        /* ── All categories view ── */
+        <div className="space-y-6">
+          {Object.entries(allGrouped).map(([catName, items]) => (
+            <div key={catName}>
+              <Link
+                href={`/categories?cat=${encodeURIComponent(catName)}`}
+                className="flex items-center gap-2 mb-2 group"
+              >
+                <span className="text-sm font-bold text-gray-600 group-hover:text-pink-500 transition-colors">
+                  {catName}
+                </span>
+                <span className="text-xs text-gray-400">({items.length})</span>
+                <span className="text-xs text-pink-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                  管理 ›
+                </span>
+              </Link>
+              <ContentListWithDelete
+                contents={items.map((c) => ({
+                  id: c.id,
+                  title: c.title,
+                  summary: c.summary,
+                  tags: c.tags,
+                  body: c.body,
+                  source_filename: c.source_filename,
+                }))}
+                category={catName}
+                allCategories={allCategoryNames}
+              />
+            </div>
+          ))}
         </div>
       )}
     </div>
