@@ -55,6 +55,14 @@ export default function AdminPage() {
   const [clearing, setClearing] = useState(false);
   const [clearResult, setClearResult] = useState<string>("");
 
+  // Backup / restore state
+  const [backupLoading, setBackupLoading] = useState(false);
+  const [restoreFile, setRestoreFile] = useState<File | null>(null);
+  const [restoring, setRestoring] = useState(false);
+  const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
+  const [restoreResult, setRestoreResult] = useState<string>("");
+  const restoreRef = useRef<HTMLInputElement>(null);
+
   // Tunnel state
   const [tunnelRunning, setTunnelRunning] = useState(false);
   const [tunnelUrl, setTunnelUrl] = useState<string | null>(null);
@@ -162,6 +170,60 @@ export default function AdminPage() {
     } finally {
       setClearing(false);
       setShowCacheConfirm(false);
+    }
+  };
+
+  const handleBackupDownload = async () => {
+    setBackupLoading(true);
+    try {
+      const res = await fetch("/api/admin/backup");
+      if (!res.ok) {
+        const data = await res.json();
+        alert(data.error || "备份失败");
+        return;
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") ?? "";
+      const match = disposition.match(/filename="([^"]+)"/);
+      const filename = match?.[1] ?? "streamer-backup.json";
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      alert("网络错误，请重试");
+    } finally {
+      setBackupLoading(false);
+    }
+  };
+
+  const handleRestore = async () => {
+    if (!restoreFile) return;
+    setRestoring(true);
+    setRestoreResult("");
+    try {
+      const text = await restoreFile.text();
+      const json = JSON.parse(text);
+      const res = await fetch("/api/admin/backup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(json),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRestoreResult(`❌ ${data.error || "恢复失败"}`);
+        return;
+      }
+      setRestoreResult(`✅ 恢复成功，共导入 ${data.restoredCount} 条内容`);
+      setRestoreFile(null);
+      if (restoreRef.current) restoreRef.current.value = "";
+    } catch (e) {
+      setRestoreResult(`❌ ${e instanceof Error ? e.message : "文件解析失败"}`);
+    } finally {
+      setRestoring(false);
+      setShowRestoreConfirm(false);
     }
   };
 
@@ -527,6 +589,108 @@ export default function AdminPage() {
             </button>
           </div>
         )}
+      </div>
+
+      {/* Backup & Restore */}
+      <div className="bg-white rounded-2xl shadow-sm p-5 space-y-4">
+        <h3 className="text-sm font-bold text-gray-600">💾 备份与恢复</h3>
+
+        {/* Export */}
+        <div className="space-y-1">
+          <p className="text-xs text-gray-400">将当前数据库所有内容导出为 JSON 文件</p>
+          <button
+            onClick={handleBackupDownload}
+            disabled={backupLoading}
+            className="w-full border border-blue-300 text-blue-600 rounded-xl py-2.5 text-sm font-medium hover:bg-blue-50 transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5"
+          >
+            {backupLoading ? "生成中..." : "⬇️ 导出备份"}
+          </button>
+        </div>
+
+        <div className="border-t border-gray-100" />
+
+        {/* Import */}
+        <div className="space-y-2">
+          <p className="text-xs text-gray-400">从备份文件恢复数据（<span className="text-orange-500 font-medium">将覆盖现有全部数据</span>）</p>
+
+          {restoreResult && (
+            <div className={`text-sm px-3 py-2 rounded-lg ${restoreResult.startsWith("❌") ? "bg-red-50 text-red-600" : "bg-green-50 text-green-600"}`}>
+              {restoreResult}
+            </div>
+          )}
+
+          <div
+            onClick={() => !restoring && restoreRef.current?.click()}
+            className={`border-2 border-dashed rounded-xl px-4 py-4 text-center transition-all ${
+              restoring
+                ? "border-gray-200 bg-gray-50 cursor-default"
+                : restoreFile
+                ? "border-orange-300 bg-orange-50 cursor-pointer"
+                : "border-gray-200 hover:border-orange-300 hover:bg-orange-50 cursor-pointer"
+            }`}
+          >
+            <input
+              ref={restoreRef}
+              type="file"
+              accept=".json"
+              className="hidden"
+              disabled={restoring}
+              onChange={(e) => {
+                setRestoreFile(e.target.files?.[0] ?? null);
+                setRestoreResult("");
+                setShowRestoreConfirm(false);
+              }}
+            />
+            {restoreFile ? (
+              <div>
+                <p className="text-sm font-medium text-gray-700">📄 {restoreFile.name}</p>
+                <p className="text-xs text-gray-400 mt-0.5">{(restoreFile.size / 1024).toFixed(1)} KB</p>
+                {!restoring && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setRestoreFile(null); setShowRestoreConfirm(false); if (restoreRef.current) restoreRef.current.value = ""; }}
+                    className="mt-1 text-xs text-red-400 hover:text-red-600"
+                  >
+                    移除文件
+                  </button>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-400">点击选择备份文件 (.json)</p>
+            )}
+          </div>
+
+          {restoreFile && !showRestoreConfirm && (
+            <button
+              onClick={() => setShowRestoreConfirm(true)}
+              className="w-full border border-orange-400 text-orange-600 rounded-xl py-2.5 text-sm font-medium hover:bg-orange-50 transition-colors"
+            >
+              ⬆️ 恢复此备份
+            </button>
+          )}
+
+          {showRestoreConfirm && (
+            <div className="border border-orange-200 rounded-xl p-3 space-y-2 bg-orange-50">
+              <p className="text-sm text-gray-700 font-medium">
+                ⚠️ 恢复将清空现有全部内容后导入备份，确认继续？
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setShowRestoreConfirm(false)}
+                  className="flex-1 border border-gray-200 bg-white text-gray-500 rounded-lg py-2 text-sm font-medium hover:bg-gray-50 transition-colors"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={handleRestore}
+                  disabled={restoring}
+                  className="flex-1 bg-orange-500 text-white rounded-lg py-2 text-sm font-medium hover:bg-orange-600 transition-colors disabled:opacity-60"
+                >
+                  {restoring ? "恢复中..." : "确认恢复"}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Danger zone */}
