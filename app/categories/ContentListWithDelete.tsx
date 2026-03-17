@@ -223,6 +223,25 @@ export default function ContentListWithDelete({
     }
   };
 
+  const handleAddSingleToScript = async (id: number) => {
+    try {
+      const res = await fetch("/api/today-script", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contentIds: [id] }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setScriptToast(`❌ ${data.error || "添加失败"}`);
+      } else {
+        setScriptToast(data.added === 0 ? "⚠️ 已在今日台本中" : "✅ 已加入今日台本");
+      }
+    } catch {
+      setScriptToast("❌ 网络错误，请重试");
+    }
+    setTimeout(() => setScriptToast(null), 2500);
+  };
+
   const handleCopy = async (id: number, text: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -468,9 +487,18 @@ export default function ContentListWithDelete({
             ) : isExpanded ? (
               /* ── Expanded ── */
               <div className="p-4">
-                <h3 className="text-base font-semibold text-gray-800 leading-snug">
-                  {item.title}
-                </h3>
+                {/* Title row with top-right collapse button */}
+                <div className="flex items-start justify-between gap-2">
+                  <h3 className="text-base font-semibold text-gray-800 leading-snug flex-1">
+                    {item.title}
+                  </h3>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); toggleExpand(item.id); }}
+                    className="flex-shrink-0 text-xs text-gray-400 hover:text-gray-600 flex items-center gap-0.5 border border-gray-200 px-2 py-1 rounded-lg -mt-0.5"
+                  >
+                    收起 <span className="text-sm leading-none">↑</span>
+                  </button>
+                </div>
                 {item.source_filename && (
                   <p className="text-xs text-gray-400 mt-1 flex items-center gap-1">
                     <span>📄</span>
@@ -494,12 +522,18 @@ export default function ContentListWithDelete({
                     />
                   </div>
                 )}
-                <div className="flex items-center gap-3 mt-3 pt-2 border-t border-gray-50">
+                <div className="flex items-center gap-2 mt-3 pt-2 border-t border-gray-50 flex-wrap">
                   <button
                     onClick={(e) => { e.stopPropagation(); handleCopy(item.id, item.body); }}
                     className="flex items-center gap-1.5 text-sm text-pink-500 hover:text-pink-700 font-medium"
                   >
                     {copiedId === item.id ? "✅ 已复制" : "📋 复制全文"}
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleAddSingleToScript(item.id); }}
+                    className="flex items-center gap-1 text-xs bg-pink-50 hover:bg-pink-100 border border-pink-200 text-pink-600 rounded-lg px-2.5 py-1.5 font-medium transition-colors"
+                  >
+                    🎙️ 今日台本
                   </button>
                   <button
                     onClick={(e) => { e.stopPropagation(); toggleExpand(item.id); }}
