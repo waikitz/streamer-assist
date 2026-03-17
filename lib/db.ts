@@ -608,6 +608,28 @@ export function removeFromTodayScript(ids: number[]): number {
   return doRemove() as number;
 }
 
+/** Remove today_script entries by content_id (not today_script.id). */
+export function removeFromTodayScriptByContentIds(contentIds: number[]): number {
+  if (contentIds.length === 0) return 0;
+  const db = getDb();
+  const stmt = db.prepare("DELETE FROM today_script WHERE content_id = ?");
+  const doRemove = db.transaction(() => {
+    let removed = 0;
+    for (const id of contentIds) {
+      removed += stmt.run(id).changes;
+    }
+    return removed;
+  });
+  return doRemove() as number;
+}
+
+/** Return a Set of content_ids that are currently in today's script. */
+export function getTodayScriptContentIds(): Set<number> {
+  const db = getDb();
+  const rows = db.prepare("SELECT content_id FROM today_script").all() as { content_id: number }[];
+  return new Set(rows.map((r) => r.content_id));
+}
+
 /** Clear all entries from today's script. */
 export function clearTodayScript(): number {
   const db = getDb();

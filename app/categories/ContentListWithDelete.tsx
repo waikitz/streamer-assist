@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, useRef, useEffect } from "react";
+import { useState, useTransition, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { marked } from "marked";
 
@@ -60,6 +60,19 @@ export default function ContentListWithDelete({
 
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+
+  // Which content IDs are currently in today's script
+  const [inScriptIds, setInScriptIds] = useState<Set<number>>(new Set());
+
+  // Fetch today's script membership on mount
+  useEffect(() => {
+    fetch("/api/today-script?ids_only=1")
+      .then((r) => r.json())
+      .then((d: { contentIds?: number[] }) => {
+        if (Array.isArray(d.contentIds)) setInScriptIds(new Set(d.contentIds));
+      })
+      .catch(() => {});
+  }, []);
 
   const toggleExpand = (id: number) => {
     setExpandedIds((prev) => {
@@ -223,24 +236,43 @@ export default function ContentListWithDelete({
     }
   };
 
-  const handleAddSingleToScript = async (id: number) => {
+  const handleToggleScript = useCallback(async (id: number) => {
+    const alreadyIn = inScriptIds.has(id);
+    // Optimistic update
+    setInScriptIds((prev) => {
+      const next = new Set(prev);
+      alreadyIn ? next.delete(id) : next.add(id);
+      return next;
+    });
     try {
-      const res = await fetch("/api/today-script", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contentIds: [id] }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setScriptToast(`❌ ${data.error || "添加失败"}`);
+      if (alreadyIn) {
+        const res = await fetch("/api/today-script", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ contentIds: [id] }),
+        });
+        if (!res.ok) throw new Error("移出失败");
+        setScriptToast("✅ 已从今日台本移出");
       } else {
-        setScriptToast(data.added === 0 ? "⚠️ 已在今日台本中" : "✅ 已加入今日台本");
+        const res = await fetch("/api/today-script", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ contentIds: [id] }),
+        });
+        if (!res.ok) throw new Error("添加失败");
+        setScriptToast("✅ 已加入今日台本");
       }
     } catch {
-      setScriptToast("❌ 网络错误，请重试");
+      // Roll back optimistic update on error
+      setInScriptIds((prev) => {
+        const next = new Set(prev);
+        alreadyIn ? next.add(id) : next.delete(id);
+        return next;
+      });
+      setScriptToast("❌ 操作失败，请重试");
     }
     setTimeout(() => setScriptToast(null), 2500);
-  };
+  }, [inScriptIds]);
 
   const handleCopy = async (id: number, text: string) => {
     try {
@@ -529,12 +561,21 @@ export default function ContentListWithDelete({
                   >
                     {copiedId === item.id ? "✅ 已复制" : "📋 复制全文"}
                   </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); handleAddSingleToScript(item.id); }}
-                    className="flex items-center gap-1 text-xs bg-pink-50 hover:bg-pink-100 border border-pink-200 text-pink-600 rounded-lg px-2.5 py-1.5 font-medium transition-colors"
-                  >
-                    🎙️ 今日台本
-                  </button>
+                  {inScriptIds.has(item.id) ? (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleToggleScript(item.id); }}
+                      className="flex items-center gap-1 text-xs bg-green-100 hover:bg-red-50 border border-green-300 hover:border-red-300 text-green-700 hover:text-red-500 rounded-lg px-2.5 py-1.5 font-medium transition-colors"
+                    >
+                      ✅ 移出今日台本
+                    </button>
+                  ) : (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleToggleScript(item.id); }}
+                      className="flex items-center gap-1 text-xs bg-pink-50 hover:bg-pink-100 border border-pink-200 text-pink-600 rounded-lg px-2.5 py-1.5 font-medium transition-colors"
+                    >
+                      🎙️ 加入今日台本
+                    </button>
+                  )}
                   <button
                     onClick={(e) => { e.stopPropagation(); toggleExpand(item.id); }}
                     className="ml-auto text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1"

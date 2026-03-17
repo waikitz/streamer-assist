@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   getTodayScript,
+  getTodayScriptContentIds,
   addToTodayScript,
   removeFromTodayScript,
+  removeFromTodayScriptByContentIds,
   clearTodayScript,
   reorderTodayScript,
 } from "@/lib/db";
@@ -10,8 +12,14 @@ import {
 export const dynamic = "force-dynamic";
 
 // GET — list today's script items in order
-export async function GET() {
+// ?ids_only=1  →  returns { contentIds: number[] } (faster, for UI state init)
+export async function GET(req: NextRequest) {
   try {
+    const idsOnly = new URL(req.url).searchParams.get("ids_only") === "1";
+    if (idsOnly) {
+      const ids = Array.from(getTodayScriptContentIds());
+      return NextResponse.json({ contentIds: ids });
+    }
     const items = getTodayScript();
     return NextResponse.json({ items });
   } catch (err) {
@@ -35,20 +43,25 @@ export async function POST(req: NextRequest) {
 }
 
 // DELETE — remove entries or clear all
-// body: { ids: number[] } to remove specific entries (today_script.id)
-// body: { all: true }    to clear everything
+// body: { ids: number[] }        remove by today_script.id
+// body: { contentIds: number[] } remove by content_id (toggle button use-case)
+// body: { all: true }            clear everything
 export async function DELETE(req: NextRequest) {
   try {
-    const body = (await req.json()) as { ids?: number[]; all?: boolean };
+    const body = (await req.json()) as { ids?: number[]; contentIds?: number[]; all?: boolean };
     if (body.all) {
       const count = clearTodayScript();
       return NextResponse.json({ success: true, removed: count });
+    }
+    if (Array.isArray(body.contentIds) && body.contentIds.length > 0) {
+      const removed = removeFromTodayScriptByContentIds(body.contentIds);
+      return NextResponse.json({ success: true, removed });
     }
     if (Array.isArray(body.ids) && body.ids.length > 0) {
       const removed = removeFromTodayScript(body.ids);
       return NextResponse.json({ success: true, removed });
     }
-    return NextResponse.json({ error: "请提供 ids 或 all:true" }, { status: 400 });
+    return NextResponse.json({ error: "请提供 ids、contentIds 或 all:true" }, { status: 400 });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
