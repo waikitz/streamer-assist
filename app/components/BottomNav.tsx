@@ -6,7 +6,7 @@ import { useUpload } from "../context/UploadContext";
 const tabs = [
   { href: "/", icon: "🔍", label: "搜索" },
   { href: "/categories", icon: "📚", label: "分类" },
-  { href: "/broadcast", icon: "🎙️", label: "台本" },
+  { href: "/broadcast", icon: "🎙️", label: "今日台本" },
   { href: "/admin", icon: "⚙️", label: "管理" },
 ];
 
@@ -47,7 +47,7 @@ export default function BottomNav() {
               } ${uploading && tab.href !== "/admin" ? "opacity-50" : ""}`}
             >
               <span className="text-[22px] leading-none">{tab.icon}</span>
-              <span className="text-[10px] font-medium">{tab.label}</span>
+              <span className={`font-medium ${tab.label.length > 2 ? "text-[9px]" : "text-[10px]"}`}>{tab.label}</span>
             </button>
           );
         })}
