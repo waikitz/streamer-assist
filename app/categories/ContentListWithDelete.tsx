@@ -469,14 +469,16 @@ export default function ContentListWithDelete({
         return (
           <div
             key={item.id}
-            className={`relative bg-white rounded-2xl shadow-sm border-2 transition-all ${
+            className={`relative rounded-2xl shadow-sm border-2 transition-all ${
               selectMode
                 ? isSelected
-                  ? "border-blue-400 bg-blue-50"
-                  : "border-transparent hover:border-gray-200 cursor-pointer"
+                  ? "bg-blue-50 border-blue-400"
+                  : "bg-white border-transparent hover:border-gray-200 cursor-pointer"
                 : isExpanded
-                  ? "border-pink-200 shadow-md"
-                  : "border-transparent hover:border-pink-100 hover:shadow-sm cursor-pointer"
+                  ? "bg-white border-pink-200 shadow-md"
+                  : inScriptIds.has(item.id)
+                    ? "bg-green-50 border-green-200 hover:border-green-300 cursor-pointer"
+                    : "bg-white border-transparent hover:border-pink-100 hover:shadow-sm cursor-pointer"
             }`}
             onClick={() => {
               if (selectMode) toggleSelect(item.id);
@@ -588,9 +590,16 @@ export default function ContentListWithDelete({
               /* ── Collapsed ── */
               <div className="p-3 flex items-center justify-between gap-2">
                 <div className="flex-1 min-w-0">
-                  <h3 className="text-sm font-semibold text-gray-800 leading-snug line-clamp-2">
-                    {item.title}
-                  </h3>
+                  <div className="flex items-start gap-1.5">
+                    <h3 className="text-sm font-semibold text-gray-800 leading-snug line-clamp-2 flex-1">
+                      {item.title}
+                    </h3>
+                    {inScriptIds.has(item.id) && (
+                      <span className="flex-shrink-0 mt-0.5 text-[10px] bg-green-100 text-green-600 px-1.5 py-0.5 rounded-full font-medium border border-green-200 whitespace-nowrap">
+                        🎙️ 台本
+                      </span>
+                    )}
+                  </div>
                   {item.summary && (
                     <p className="text-xs text-gray-400 mt-0.5 line-clamp-1">{item.summary}</p>
                   )}

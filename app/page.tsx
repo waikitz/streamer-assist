@@ -49,6 +49,8 @@ export default function HomePage() {
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [categories, setCategories] = useState<string[]>([]);
   const [history, setHistory] = useState<SearchHistory[]>([]);
+  const [inScriptIds, setInScriptIds] = useState<Set<number>>(new Set());
+  const [scriptToast, setScriptToast] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -58,6 +60,12 @@ export default function HomePage() {
       .then((r) => r.json())
       .then((data) => {
         setCategories(data.categories?.map((c: { name: string }) => c.name) || []);
+      })
+      .catch(() => {});
+    fetch("/api/today-script?ids_only=1")
+      .then((r) => r.json())
+      .then((d: { contentIds?: number[] }) => {
+        if (Array.isArray(d.contentIds)) setInScriptIds(new Set(d.contentIds));
       })
       .catch(() => {});
   }, []);
@@ -146,6 +154,40 @@ export default function HomePage() {
     }
   };
 
+  const handleToggleScript = useCallback(async (id: number) => {
+    const alreadyIn = inScriptIds.has(id);
+    setInScriptIds((prev) => {
+      const next = new Set(prev);
+      alreadyIn ? next.delete(id) : next.add(id);
+      return next;
+    });
+    try {
+      if (alreadyIn) {
+        await fetch("/api/today-script", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ contentIds: [id] }),
+        });
+        setScriptToast("✅ 已从今日台本移出");
+      } else {
+        await fetch("/api/today-script", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ contentIds: [id] }),
+        });
+        setScriptToast("✅ 已加入今日台本");
+      }
+    } catch {
+      setInScriptIds((prev) => {
+        const next = new Set(prev);
+        alreadyIn ? next.add(id) : next.delete(id);
+        return next;
+      });
+      setScriptToast("❌ 操作失败，请重试");
+    }
+    setTimeout(() => setScriptToast(null), 2500);
+  }, [inScriptIds]);
+
   return (
     <div className="space-y-4">
       {/* Search input */}
@@ -230,6 +272,15 @@ export default function HomePage() {
         </div>
       )}
 
+      {/* Script toast */}
+      {scriptToast && (
+        <div className={`text-xs text-center px-3 py-2 rounded-xl font-medium sticky top-0 z-10 ${
+          scriptToast.startsWith("❌") ? "bg-red-50 text-red-500" : "bg-green-50 text-green-600"
+        }`}>
+          {scriptToast}
+        </div>
+      )}
+
       {/* Results */}
       {results !== null && (
         <div className="space-y-3">
@@ -252,71 +303,100 @@ export default function HomePage() {
               <p className="text-sm mt-1">试试其他关键词吧</p>
             </div>
           ) : (
-            results.map((item) => (
-              <div
-                key={item.id}
-                className="bg-white rounded-2xl shadow-sm p-4 border-2 border-transparent"
-              >
-                {/* Header */}
-                <div className="flex items-start justify-between gap-2">
-                  <h3 className="text-base font-semibold text-gray-800 leading-snug flex-1">
-                    {item.title}
-                  </h3>
-                  <span className="flex-shrink-0 bg-pink-100 text-pink-600 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">
-                    {item.category_name}
-                  </span>
-                </div>
-
-                {/* Summary */}
-                {item.summary && (
-                  <p className="text-sm text-gray-500 mt-1.5 line-clamp-2">
-                    {item.summary}
-                  </p>
-                )}
-
-                {/* Tags */}
-                {item.tags?.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 mt-2">
-                    {item.tags.slice(0, 4).map((tag) => (
-                      <span
-                        key={tag}
-                        className="text-xs text-gray-400 bg-gray-50 px-2 py-0.5 rounded-full border border-gray-100"
-                      >
-                        #{tag}
+            results.map((item) => {
+              const inScript = inScriptIds.has(item.id);
+              return (
+                <div
+                  key={item.id}
+                  className={`rounded-2xl shadow-sm p-4 border-2 transition-colors ${
+                    inScript
+                      ? "bg-green-50 border-green-200"
+                      : "bg-white border-transparent"
+                  }`}
+                >
+                  {/* Header */}
+                  <div className="flex items-start justify-between gap-2">
+                    <h3 className="text-base font-semibold text-gray-800 leading-snug flex-1">
+                      {item.title}
+                    </h3>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      {inScript && (
+                        <span className="text-[10px] bg-green-100 text-green-600 px-1.5 py-0.5 rounded-full font-medium border border-green-200 whitespace-nowrap">
+                          🎙️ 台本
+                        </span>
+                      )}
+                      <span className="bg-pink-100 text-pink-600 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">
+                        {item.category_name}
                       </span>
-                    ))}
+                    </div>
                   </div>
-                )}
 
-                {/* Action row */}
-                <div className="mt-3 flex items-center justify-between gap-2">
-                  <button
-                    onClick={() => toggleExpand(item.id)}
-                    className="text-sm text-pink-500 font-medium"
-                  >
-                    {expandedIds.has(item.id) ? "收起 ▴" : "展开全文 ▾"}
-                  </button>
-                  <button
-                    onClick={() => handleCopy(item.id, item.body)}
-                    className="flex items-center gap-1 bg-pink-50 hover:bg-pink-100 border border-pink-200 text-pink-600 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors"
-                  >
-                    {copiedId === item.id ? "✅ 已复制" : "📋 复制"}
-                  </button>
+                  {/* Summary */}
+                  {item.summary && (
+                    <p className="text-sm text-gray-500 mt-1.5 line-clamp-2">
+                      {item.summary}
+                    </p>
+                  )}
+
+                  {/* Tags */}
+                  {item.tags?.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {item.tags.slice(0, 4).map((tag) => (
+                        <span
+                          key={tag}
+                          className="text-xs text-gray-400 bg-gray-50 px-2 py-0.5 rounded-full border border-gray-100"
+                        >
+                          #{tag}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Action row */}
+                  <div className="mt-3 flex items-center gap-2 flex-wrap">
+                    <button
+                      onClick={() => toggleExpand(item.id)}
+                      className="text-sm text-pink-500 font-medium"
+                    >
+                      {expandedIds.has(item.id) ? "收起 ▴" : "展开全文 ▾"}
+                    </button>
+                    <button
+                      onClick={() => handleCopy(item.id, item.body)}
+                      className="flex items-center gap-1 bg-pink-50 hover:bg-pink-100 border border-pink-200 text-pink-600 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors"
+                    >
+                      {copiedId === item.id ? "✅ 已复制" : "📋 复制"}
+                    </button>
+                    {inScript ? (
+                      <button
+                        onClick={() => handleToggleScript(item.id)}
+                        className="flex items-center gap-1 text-xs bg-green-100 hover:bg-red-50 border border-green-300 hover:border-red-300 text-green-700 hover:text-red-500 rounded-lg px-2.5 py-1.5 font-medium transition-colors"
+                      >
+                        ✅ 移出今日台本
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleToggleScript(item.id)}
+                        className="flex items-center gap-1 text-xs bg-pink-50 hover:bg-pink-100 border border-pink-200 text-pink-600 rounded-lg px-2.5 py-1.5 font-medium transition-colors"
+                      >
+                        🎙️ 加入今日台本
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Expanded body */}
+                  {expandedIds.has(item.id) && (
+                    <div className="mt-3 pt-3 border-t border-pink-50">
+                      <div
+                        className="markdown-body text-sm"
+                        dangerouslySetInnerHTML={{
+                          __html: marked(item.body) as string,
+                        }}
+                      />
+                    </div>
+                  )}
                 </div>
-
-                {/* Expanded body */}
-                {expandedIds.has(item.id) && (
-                  <div className="mt-3 pt-3 border-t border-pink-50">
-                    <div
-                      className="markdown-body text-sm"
-                      dangerouslySetInnerHTML={{
-                        __html: marked(item.body) as string,
-                      }}
-                    />
-                  </div>
-                )}
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       )}
