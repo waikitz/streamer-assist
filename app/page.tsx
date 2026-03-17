@@ -10,6 +10,7 @@ interface ContentResult {
   body: string;
   category_name: string;
   tags: string[];
+  source_filename: string;
   created_at: string;
 }
 
@@ -305,93 +306,123 @@ export default function HomePage() {
           ) : (
             results.map((item) => {
               const inScript = inScriptIds.has(item.id);
+              const isExpanded = expandedIds.has(item.id);
               return (
                 <div
                   key={item.id}
-                  className={`rounded-2xl shadow-sm p-4 border-2 transition-colors ${
-                    inScript
-                      ? "bg-green-50 border-green-200"
-                      : "bg-white border-transparent"
+                  className={`relative rounded-2xl shadow-sm border-2 transition-all ${
+                    isExpanded
+                      ? "bg-white border-pink-200 shadow-md"
+                      : inScript
+                        ? "bg-green-50 border-green-200 hover:border-green-300 cursor-pointer"
+                        : "bg-white border-transparent hover:border-pink-100 hover:shadow-sm cursor-pointer"
                   }`}
+                  onClick={() => { if (!isExpanded) toggleExpand(item.id); }}
                 >
-                  {/* Header */}
-                  <div className="flex items-start justify-between gap-2">
-                    <h3 className="text-base font-semibold text-gray-800 leading-snug flex-1">
-                      {item.title}
-                    </h3>
-                    <div className="flex items-center gap-1.5 flex-shrink-0">
-                      {inScript && (
-                        <span className="text-[10px] bg-green-100 text-green-600 px-1.5 py-0.5 rounded-full font-medium border border-green-200 whitespace-nowrap">
-                          🎙️ 台本
-                        </span>
-                      )}
-                      <span className="bg-pink-100 text-pink-600 text-xs px-2 py-0.5 rounded-full whitespace-nowrap">
-                        {item.category_name}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Summary */}
-                  {item.summary && (
-                    <p className="text-sm text-gray-500 mt-1.5 line-clamp-2">
-                      {item.summary}
-                    </p>
-                  )}
-
-                  {/* Tags */}
-                  {item.tags?.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mt-2">
-                      {item.tags.slice(0, 4).map((tag) => (
-                        <span
-                          key={tag}
-                          className="text-xs text-gray-400 bg-gray-50 px-2 py-0.5 rounded-full border border-gray-100"
+                  {isExpanded ? (
+                    /* ── Expanded ── */
+                    <div className="p-4">
+                      {/* Title row with top-right collapse button */}
+                      <div className="flex items-start justify-between gap-2">
+                        <h3 className="text-base font-semibold text-gray-800 leading-snug flex-1">
+                          {item.title}
+                        </h3>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); toggleExpand(item.id); }}
+                          className="flex-shrink-0 text-xs text-gray-400 hover:text-gray-600 flex items-center gap-0.5 border border-gray-200 px-2 py-1 rounded-lg -mt-0.5"
                         >
-                          #{tag}
-                        </span>
-                      ))}
+                          收起 <span className="text-sm leading-none">↑</span>
+                        </button>
+                      </div>
+                      {/* Category badge */}
+                      {item.category_name && (
+                        <p className="text-xs text-pink-400 font-medium mt-1">{item.category_name}</p>
+                      )}
+                      {/* Source filename */}
+                      {item.source_filename && (
+                        <p className="text-xs text-gray-400 mt-1 flex items-center gap-1">
+                          <span>📄</span>
+                          <span className="truncate">{item.source_filename}</span>
+                        </p>
+                      )}
+                      {/* Tags */}
+                      {item.tags?.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 mt-2">
+                          {item.tags.slice(0, 4).map((tag) => (
+                            <span key={tag} className="text-xs text-gray-400 bg-gray-50 px-2 py-0.5 rounded-full border border-gray-100">
+                              #{tag}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {/* Body */}
+                      {item.body && (
+                        <div className="border-t border-gray-50 mt-3 pt-3">
+                          <div
+                            className="markdown-body text-sm"
+                            dangerouslySetInnerHTML={{ __html: marked(item.body) as string }}
+                          />
+                        </div>
+                      )}
+                      {/* Action row */}
+                      <div className="flex items-center gap-2 mt-3 pt-2 border-t border-gray-50 flex-wrap">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleCopy(item.id, item.body); }}
+                          className="flex items-center gap-1.5 text-sm text-pink-500 hover:text-pink-700 font-medium"
+                        >
+                          {copiedId === item.id ? "✅ 已复制" : "📋 复制全文"}
+                        </button>
+                        {inScript ? (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleToggleScript(item.id); }}
+                            className="flex items-center gap-1 text-xs bg-green-100 hover:bg-red-50 border border-green-300 hover:border-red-300 text-green-700 hover:text-red-500 rounded-lg px-2.5 py-1.5 font-medium transition-colors"
+                          >
+                            ✅ 移出今日台本
+                          </button>
+                        ) : (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleToggleScript(item.id); }}
+                            className="flex items-center gap-1 text-xs bg-pink-50 hover:bg-pink-100 border border-pink-200 text-pink-600 rounded-lg px-2.5 py-1.5 font-medium transition-colors"
+                          >
+                            🎙️ 加入今日台本
+                          </button>
+                        )}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); toggleExpand(item.id); }}
+                          className="ml-auto text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1"
+                        >
+                          收起 <span className="text-base leading-none">↑</span>
+                        </button>
+                      </div>
                     </div>
-                  )}
-
-                  {/* Action row */}
-                  <div className="mt-3 flex items-center gap-2 flex-wrap">
-                    <button
-                      onClick={() => toggleExpand(item.id)}
-                      className="text-sm text-pink-500 font-medium"
-                    >
-                      {expandedIds.has(item.id) ? "收起 ▴" : "展开全文 ▾"}
-                    </button>
-                    <button
-                      onClick={() => handleCopy(item.id, item.body)}
-                      className="flex items-center gap-1 bg-pink-50 hover:bg-pink-100 border border-pink-200 text-pink-600 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors"
-                    >
-                      {copiedId === item.id ? "✅ 已复制" : "📋 复制"}
-                    </button>
-                    {inScript ? (
-                      <button
-                        onClick={() => handleToggleScript(item.id)}
-                        className="flex items-center gap-1 text-xs bg-green-100 hover:bg-red-50 border border-green-300 hover:border-red-300 text-green-700 hover:text-red-500 rounded-lg px-2.5 py-1.5 font-medium transition-colors"
-                      >
-                        ✅ 移出今日台本
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => handleToggleScript(item.id)}
-                        className="flex items-center gap-1 text-xs bg-pink-50 hover:bg-pink-100 border border-pink-200 text-pink-600 rounded-lg px-2.5 py-1.5 font-medium transition-colors"
-                      >
-                        🎙️ 加入今日台本
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Expanded body */}
-                  {expandedIds.has(item.id) && (
-                    <div className="mt-3 pt-3 border-t border-pink-50">
-                      <div
-                        className="markdown-body text-sm"
-                        dangerouslySetInnerHTML={{
-                          __html: marked(item.body) as string,
-                        }}
-                      />
+                  ) : (
+                    /* ── Collapsed ── */
+                    <div className="p-3 flex items-center justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-start gap-1.5">
+                          <h3 className="text-sm font-semibold text-gray-800 leading-snug line-clamp-2 flex-1">
+                            {item.title}
+                          </h3>
+                          {inScript && (
+                            <span className="flex-shrink-0 mt-0.5 text-[10px] bg-green-100 text-green-600 px-1.5 py-0.5 rounded-full font-medium border border-green-200 whitespace-nowrap">
+                              🎙️ 台本
+                            </span>
+                          )}
+                        </div>
+                        {item.summary && (
+                          <p className="text-xs text-gray-400 mt-0.5 line-clamp-1">{item.summary}</p>
+                        )}
+                        {item.source_filename && (
+                          <p className="text-xs text-gray-300 mt-0.5 flex items-center gap-0.5 truncate">
+                            <span>📄</span>
+                            <span className="truncate">{item.source_filename}</span>
+                          </p>
+                        )}
+                        {item.category_name && (
+                          <p className="text-[10px] text-pink-400 mt-0.5 font-medium">{item.category_name}</p>
+                        )}
+                      </div>
+                      <span className="text-gray-300 text-lg flex-shrink-0">›</span>
                     </div>
                   )}
                 </div>
